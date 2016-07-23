@@ -1,65 +1,124 @@
+/*
+ * Copyright 2016 Java Helps
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.javahelps.externalsqliteimporter;
 
 import android.annotation.TargetApi;
 import android.content.Context;
-import android.content.pm.PackageManager;
 import android.database.DatabaseErrorHandler;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 import android.os.Build;
-import android.support.v4.content.PermissionChecker;
-import android.util.Log;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
-import java.io.FileReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.Reader;
-import java.util.Scanner;
 
 /**
  * Import database from external location into the Android application.
  */
 public abstract class ExternalSQLiteOpenHelper {
     private final SQLiteOpenHelper sqLiteOpenHelper;
-    public static final String READ_EXTERNAL_STORAGE_PERMISSION = "android.permission.READ_EXTERNAL_STORAGE";
-    private static final String TAG = ExternalSQLiteOpenHelper.class.getSimpleName();
-    private static final String DATABASES = "databases";
-    private static final String VERSION_INFO = "version.info";
-
-
-    private final String sourceDirectory;
+    private String sourceDirectory;
     private final Context context;
     private final String databaseName;
-    private final String updateScript;
+    private boolean fromAssets;
+    private boolean upgradeFromExternalSource;
+    private int oldVersion;
+    private int newVersion;
 
-    public ExternalSQLiteOpenHelper(Context context, String name, String sourceDirectory, SQLiteDatabase.CursorFactory factory, int version) {
+    /**
+     * Construct a DatabaseOpenHelper to deploy database from assets/database/ directory.
+     * The database file name must be same as the name given to this constructor.
+     * This DatabaseOpenHelper will not use any external resources.
+     *
+     * @param context the Android context
+     * @param name    name of the database
+     * @param factory optional cursor factory
+     * @param version version of the database
+     */
+    public ExternalSQLiteOpenHelper(Context context, String name, SQLiteDatabase.CursorFactory factory, int version) {
+        this.sqLiteOpenHelper = new InternalOpenHelper(context, name, factory, version);
+        this.context = context;
+        this.databaseName = name;
+        this.fromAssets = true;
+    }
+
+    /**
+     * Construct a DatabaseOpenHelper to deploy database from the given source directory.
+     * The database file name must be same as the name given to this constructor.
+     *
+     * @param context         the Android context
+     * @param name            name of the database
+     * @param sourceDirectory the external directory contains the database and version.info
+     * @param factory         the optional cursor factory
+     */
+    public ExternalSQLiteOpenHelper(Context context, String name, String sourceDirectory, SQLiteDatabase.CursorFactory factory) {
+        Utility.validatePermissions(context);
+        int version = Utility.readVersionFrom(sourceDirectory + File.separator + ExternalSQLiteOpenHelperConstants.VERSION_INFO);
         this.sqLiteOpenHelper = new InternalOpenHelper(context, name, factory, version);
         this.sourceDirectory = sourceDirectory;
         this.context = context;
         this.databaseName = name;
-        this.updateScript = name + "_update_%d.sql";
     }
 
+    /**
+     * Construct a DatabaseOpenHelper to deploy database from assets/database/ directory.
+     * The database file name must be same as the name given to this constructor.
+     * This DatabaseOpenHelper will not use any external resources.
+     *
+     * @param context      the Android context
+     * @param name         name of the database
+     * @param factory      optional cursor factory
+     * @param version      version of the database
+     * @param errorHandler error handler
+     */
     @TargetApi(Build.VERSION_CODES.HONEYCOMB)
-    public ExternalSQLiteOpenHelper(Context context, String name, String sourceDirectory, SQLiteDatabase.CursorFactory factory, int version, DatabaseErrorHandler errorHandler) {
+    public ExternalSQLiteOpenHelper(Context context, String name, SQLiteDatabase.CursorFactory factory, int version, DatabaseErrorHandler errorHandler) {
+        this.sqLiteOpenHelper = new InternalOpenHelper(context, name, factory, version, errorHandler);
+        this.context = context;
+        this.databaseName = name;
+        this.fromAssets = true;
+    }
+
+    /**
+     * Construct a DatabaseOpenHelper to deploy database from the given source directory.
+     * The database file name must be same as the name given to this constructor.
+     *
+     * @param context         the Android context
+     * @param name            name of the database
+     * @param sourceDirectory the external directory contains the database and version.info
+     * @param factory         optional cursor factory
+     * @param errorHandler    error handler
+     */
+    @TargetApi(Build.VERSION_CODES.HONEYCOMB)
+    public ExternalSQLiteOpenHelper(Context context, String name, String sourceDirectory, SQLiteDatabase.CursorFactory factory, DatabaseErrorHandler errorHandler) {
+        Utility.validatePermissions(context);
+        int version = Utility.readVersionFrom(sourceDirectory + File.separator + ExternalSQLiteOpenHelperConstants.VERSION_INFO);
         this.sqLiteOpenHelper = new InternalOpenHelper(context, name, factory, version, errorHandler);
         this.sourceDirectory = sourceDirectory;
         this.context = context;
         this.databaseName = name;
-        this.updateScript = name + "_update_%d.sql";
     }
 
+    /**
+     * Returns the name of the database.
+     *
+     * @return the name of the database
+     */
     public final String getDatabaseName() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.ICE_CREAM_SANDWICH) {
-            return this.sqLiteOpenHelper.getDatabaseName();
-        } else {
-            return this.databaseName;
-        }
+        return this.databaseName;
     }
 
     @TargetApi(Build.VERSION_CODES.JELLY_BEAN)
@@ -67,16 +126,29 @@ public abstract class ExternalSQLiteOpenHelper {
         this.sqLiteOpenHelper.setWriteAheadLoggingEnabled(enabled);
     }
 
+    /**
+     * Get a writable database.
+     *
+     * @return writable database
+     */
     public final synchronized SQLiteDatabase getWritableDatabase() {
         deployExternalDatabase();
         return this.sqLiteOpenHelper.getWritableDatabase();
     }
 
+    /**
+     * Get a read only database.
+     *
+     * @return read only database
+     */
     public final synchronized SQLiteDatabase getReadableDatabase() {
         deployExternalDatabase();
         return this.sqLiteOpenHelper.getReadableDatabase();
     }
 
+    /**
+     * Close the connection.
+     */
     public final synchronized void close() {
         this.sqLiteOpenHelper.close();
     }
@@ -86,220 +158,185 @@ public abstract class ExternalSQLiteOpenHelper {
         this.sqLiteOpenHelper.onConfigure(db);
     }
 
-    public abstract void onUpgradeInternally(SQLiteDatabase database, int oldVersion, int newVersion);
-
-    public void onDowngradeInternally(SQLiteDatabase db, int oldVersion, int newVersion) {
+    /**
+     * Called when the database deployed from assets directory is upgraded.
+     *
+     * @param database       current database
+     * @param currentVersion current version
+     * @param newVersion     new version
+     */
+    public void onUpgradeInternally(SQLiteDatabase database, int currentVersion, int newVersion) {
         // Do nothing
     }
 
-    public abstract void onUpgradeExternally(SQLiteDatabase currentDatabase, SQLiteDatabase readOnlyExternalDatabase, String externalDBPath, int currentVersion, int newVersion);
-
-    public void onDowngradeExternally(SQLiteDatabase currentDatabase, SQLiteDatabase readOnlyExternalDatabase, String externalDBPath, int currentVersion, int newVersion) {
+    /**
+     * Called when the database deployed from assets directory is downgraded.
+     *
+     * @param database       current database
+     * @param currentVersion current version
+     * @param newVersion     new version
+     */
+    public void onDowngradeInternally(SQLiteDatabase database, int currentVersion, int newVersion) {
         // Do nothing
     }
+
+    /**
+     * Called when the database deployed from external directory is upgraded using another database.
+     * This method is called before the onUpgradeExternally with attached database.
+     *
+     * @param writableDatabase         writable current database
+     * @param readOnlyExternalDatabase read only external database
+     * @param currentVersion           current version
+     * @param newVersion               new version
+     */
+    public void onUpgradeExternally(SQLiteDatabase writableDatabase, SQLiteDatabase readOnlyExternalDatabase, int currentVersion, int newVersion) {
+        // Do nothing
+    }
+
+    /**
+     * This method is called after onUpgradeExternally with current and external databases.
+     * The given attachedDatabase is the current database attached with the external database.
+     *
+     * @param attachedDatabase current database attached with external database
+     * @param currentVersion   current version
+     * @param newVersion       new version
+     */
+    public void onUpgradeExternally(SQLiteDatabase attachedDatabase, int currentVersion, int newVersion) {
+        // Do nothing
+    }
+
+    /**
+     * Called when the database deployed from external directory is downgraded using another database.
+     * This method is called before the onDowngradeExternally with attached database.
+     *
+     * @param writableDatabase         writable current database
+     * @param readOnlyExternalDatabase read only external database
+     * @param currentVersion           current version
+     * @param newVersion               new version
+     */
+    public void onDowngradeExternally(SQLiteDatabase writableDatabase, SQLiteDatabase readOnlyExternalDatabase, int currentVersion, int newVersion) {
+        // Do nothing
+    }
+
+    /**
+     * Called when the database deployed from external directory is downgraded using another database.
+     * This method is called before the onDowngradeExternally with attached database.
+     *
+     * @param attachedDatabase current database attached with external database
+     * @param currentVersion   current version
+     * @param newVersion       new version
+     */
+    public void onDowngradeExternally(SQLiteDatabase attachedDatabase, int currentVersion, int newVersion) {
+        // Do nothing
+    }
+
 
     private synchronized void deployExternalDatabase() throws ExternalSQLiteOpenHelperException {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && PermissionChecker.checkSelfPermission(context, READ_EXTERNAL_STORAGE_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
-            throw new ExternalSQLiteOpenHelperException(READ_EXTERNAL_STORAGE_PERMISSION + " permission is not granted");
-        }
+        // Destination location
         File destination = new File(context.getFilesDir().getAbsolutePath().replace("files", "databases") + File.separator + this.databaseName);
+
+        // Source location
         File source = new File(this.sourceDirectory, this.databaseName);
+
         if (!destination.exists()) {
-            this.sqLiteOpenHelper.getReadableDatabase().close();
-            copyFile(source, destination);
+            try {
+                // This is the first time, deploy the database
+                this.sqLiteOpenHelper.getReadableDatabase().close();
+                if (fromAssets) {
+                    String assetsFilePath = ExternalSQLiteOpenHelperConstants.ASSETS_DATABASE + File.separator + this.databaseName;
+                    Utility.copyDatabaseFromAssets(this.context, assetsFilePath, destination);
+                } else {
+                    Utility.copyDatabaseFromExternalSource(source, destination);
+                }
+            } catch (Throwable ex) {
+                context.deleteDatabase(this.databaseName);  // Roll back the changes
+                throw ex;
+            }
         } else {
-            // Update the database
+            // Trigger upgrade
+            this.sqLiteOpenHelper.getReadableDatabase().close();
+            // Upgrade or downgrade
+            if (upgradeFromExternalSource) {
+                upgradeFromExternalDatabase();
+            }
+        }
+    }
 
-            // Read the version
-            SQLiteDatabase sqLiteDatabase = this.sqLiteOpenHelper.getReadableDatabase();
-            int currentVersion = sqLiteDatabase.getVersion();
+    private synchronized void upgradeFromExternalDatabase() {
+        SQLiteDatabase sqLiteDatabase = this.sqLiteOpenHelper.getWritableDatabase();
+
+        // Rollback to older version
+        sqLiteDatabase.beginTransaction();
+        try {
+            sqLiteDatabase.setVersion(this.oldVersion);
+            sqLiteDatabase.setTransactionSuccessful();
+        } finally {
+            sqLiteDatabase.endTransaction();
+        }
+
+        File databaseSource = new File(sourceDirectory, databaseName);
+        String script = Utility.readUpgradeScriptFromExternalSource(Utility.getUpgradeScriptPath(this.sourceDirectory, this.oldVersion, this.newVersion));
+        boolean externalDatabaseExists = databaseSource.exists();
+        if (!externalDatabaseExists && script == null) {
+            // No resource available to upgrade
+            throw new ExternalSQLiteOpenHelperException("Neither database nor upgrade script found to upgrade");
+        }
+
+        sqLiteDatabase = this.sqLiteOpenHelper.getWritableDatabase();
+        sqLiteDatabase.beginTransaction();
+
+        try {
+            // Execute sql upgrade script
+            if (script != null) {
+                sqLiteDatabase.execSQL(script);
+                if (externalDatabaseExists) {
+                    updateFromExternalDatabase(sqLiteDatabase, databaseSource);
+                }
+            } else if (externalDatabaseExists) {
+                updateFromExternalDatabase(sqLiteDatabase, databaseSource);
+            }
+            // If everything goes smoothly, update the version
+            sqLiteDatabase.setVersion(this.newVersion);
+            sqLiteDatabase.setTransactionSuccessful();
+        } finally {
+            sqLiteDatabase.endTransaction();
             sqLiteDatabase.close();
+        }
 
-            int externalVersion = getExternallyDefinedVersion(currentVersion);
-            if (currentVersion != externalVersion) {
-                // Upgrade due to external change
-                File databaseSource = new File(sourceDirectory, databaseName);
-                String updateScript = getUpdateScript(externalVersion);
+        // Upgrade using attachment
+        if (externalDatabaseExists) {
+            sqLiteDatabase = this.sqLiteOpenHelper.getReadableDatabase();
+            try {
+                sqLiteDatabase.execSQL("ATTACH DATABASE '" + databaseSource.getAbsolutePath() + "' AS " + ExternalSQLiteOpenHelperConstants.ATTACHED_EXTERNAL_DATABASE_NAME + ";");
 
-                if (updateScript != null && !databaseSource.exists()) {
-                    throw new ExternalSQLiteOpenHelperException("External database nor update script is not available");
+                if (oldVersion < newVersion) {
+                    onUpgradeExternally(sqLiteDatabase, oldVersion, newVersion);
+                } else {
+                    onDowngradeExternally(sqLiteDatabase, oldVersion, newVersion);
                 }
 
-                // Execute sql script
-                if (updateScript != null) {
-                    sqLiteDatabase = this.sqLiteOpenHelper.getWritableDatabase();
-                    sqLiteDatabase.beginTransaction();
-                    try {
-                        sqLiteDatabase.execSQL(updateScript);
-                        sqLiteDatabase.setTransactionSuccessful();
-                    } finally {
-                        sqLiteDatabase.endTransaction();
-                        sqLiteDatabase.close();
-                    }
-                }
-
-                // Call onUpgradeExternally or onDowngradeExternally
-                if (databaseSource.exists()) {
-                    // Close the writable database and open readable database
-                    sqLiteDatabase = this.sqLiteOpenHelper.getReadableDatabase();
-                    SQLiteDatabase externalDatabase = SQLiteDatabase.openDatabase(databaseSource.getAbsolutePath(), null, SQLiteDatabase.OPEN_READONLY);
-                    if (externalDatabase == null) {
-                        throw new ExternalSQLiteOpenHelperException("Source database is not valid or corrupted");
-                    }
-                    try {
-                        if (currentVersion < externalVersion) {
-                            onUpgradeExternally(sqLiteDatabase, externalDatabase, databaseSource.getAbsolutePath(), currentVersion, externalVersion);
-                        } else {
-                            onDowngradeExternally(sqLiteDatabase, externalDatabase, databaseSource.getAbsolutePath(), currentVersion, externalVersion);
-                        }
-                    } finally {
-                        externalDatabase.close();
-                    }
-                    sqLiteDatabase.close();
-                }
-
-                // Update the version
-                sqLiteDatabase = this.sqLiteOpenHelper.getWritableDatabase();
-                sqLiteDatabase.beginTransaction();
-                sqLiteDatabase.setVersion(externalVersion);
-                sqLiteDatabase.setTransactionSuccessful();
-                sqLiteDatabase.endTransaction();
+                sqLiteDatabase.execSQL("DETACH " + ExternalSQLiteOpenHelperConstants.ATTACHED_EXTERNAL_DATABASE_NAME + ";");
+            } finally {
                 sqLiteDatabase.close();
             }
         }
     }
 
-    private synchronized String getUpdateScript(int forVersion) {
-        String script = null;
-        File scriptFile = new File(this.sourceDirectory, String.format(updateScript, forVersion));
-        Reader fileReader = null;
-        BufferedReader bufferedReader = null;
+    private void updateFromExternalDatabase(SQLiteDatabase sqLiteDatabase, File databaseSource) {
+        SQLiteDatabase externalDatabase = SQLiteDatabase.openDatabase(databaseSource.getAbsolutePath(), null, SQLiteDatabase.OPEN_READONLY);
         try {
-            if (scriptFile.exists()) {
-                fileReader = new FileReader(scriptFile);
-                bufferedReader = new BufferedReader(fileReader);
-                StringBuilder builder = new StringBuilder();
-                String line;
-                while ((line = bufferedReader.readLine()) != null) {
-                    builder.append(line);
-                }
-                if (builder.length() > 0) {
-                    script = builder.toString();
-                }
+            if (externalDatabase == null) {
+                throw new ExternalSQLiteOpenHelperException("Source database is not valid or corrupted");
             }
-        } catch (FileNotFoundException e) {
-            Log.i(TAG, "Failed to open script file: " + updateScript);
-        } catch (IOException e) {
-            Log.i(TAG, "Failed to read script file: " + updateScript);
-        } finally {
-            if (bufferedReader != null) {
-                try {
-                    bufferedReader.close();
-                } catch (IOException e) {
-                    Log.e(TAG, "Failed to close script file: " + updateScript);
-                }
-            } else if (fileReader != null) {
-                try {
-                    fileReader.close();
-                } catch (IOException e) {
-                    Log.e(TAG, "Failed to close script file: " + updateScript);
-                }
-            }
-        }
-
-        return script;
-    }
-
-    private synchronized int getExternallyDefinedVersion(int defaultValue) {
-        int externalVersion = defaultValue;
-        Scanner scanner = null;
-        try {
-            File versionFile = new File(this.sourceDirectory + File.separator + VERSION_INFO);
-            System.out.println(versionFile.getAbsolutePath());
-            scanner = new Scanner(versionFile);
-            if (scanner.hasNextInt()) {
-                externalVersion = scanner.nextInt();
-                if (externalVersion < 1) {
-                    throw new IllegalArgumentException("Version must be >= 1, was " + externalVersion);
-                }
+            // Let the user to do whatever required
+            if (oldVersion < newVersion) {
+                onUpgradeExternally(sqLiteDatabase, externalDatabase, oldVersion, newVersion);
             } else {
-                throw new ExternalSQLiteOpenHelperException(VERSION_INFO + " does not contain a valid integer version number");
+                onDowngradeExternally(sqLiteDatabase, externalDatabase, oldVersion, newVersion);
             }
-        } catch (FileNotFoundException e) {
-            // throw new ExternalSQLiteOpenHelperException(VERSION_INFO + " file does not exist in source directory");
-            Log.i(TAG, VERSION_INFO + " file does not exist in source directory. Continue with internal version " + defaultValue);
         } finally {
-            if (scanner != null) {
-                scanner.close();
-            }
-        }
-
-        return externalVersion;
-    }
-
-    private synchronized void copyFile(File from, File to) {
-        InputStream inputStream = null;
-        if (from.exists()) {
-            try {
-                inputStream = new FileInputStream(from);
-            } catch (FileNotFoundException e) {
-                if (inputStream != null) {
-                    try {
-                        inputStream.close();
-                    } catch (IOException e1) {
-                        Log.e(TAG, "Error in closing external database source");
-                    }
-                }
-                throw new ExternalSQLiteOpenHelperException("Failed to open database from external source");
-            }
-        } else {
-            try {
-                inputStream = context.getAssets().open(DATABASES + File.separator + this.databaseName);
-            } catch (IOException e) {
-                if (inputStream != null) {
-                    try {
-                        inputStream.close();
-                    } catch (IOException e1) {
-                        Log.e(TAG, "Error in closing external database from assets source");
-                    }
-                }
-                throw new ExternalSQLiteOpenHelperException("External database does not exist. Failed to open database from assets/databases folder");
-            }
-        }
-        FileOutputStream outputStream = null;
-        try {
-            outputStream = new FileOutputStream(to);
-        } catch (FileNotFoundException e) {
-            if (outputStream != null) {
-                try {
-                    outputStream.close();
-                } catch (IOException e1) {
-                    Log.e(TAG, "Error in closing database destination");
-                }
-            }
-            throw new ExternalSQLiteOpenHelperException("Failed to open database destination");
-        }
-
-        try {
-            // Copy
-            byte[] buffer = new byte[1024];
-            int length;
-
-            while ((length = inputStream.read(buffer)) > 0) {
-                outputStream.write(buffer, 0, length);
-            }
-        } catch (IOException e) {
-            throw new ExternalSQLiteOpenHelperException("Failed to copy external database to the destination");
-        } finally {
-            try {
-                outputStream.close();
-            } catch (IOException e) {
-                Log.e(TAG, "Failed to close the external database");
-            }
-            try {
-                inputStream.close();
-            } catch (IOException e) {
-                Log.e(TAG, "Failed to close the destination");
+            if (externalDatabase != null) {
+                externalDatabase.close();
             }
         }
     }
@@ -326,12 +363,38 @@ public abstract class ExternalSQLiteOpenHelper {
 
         @Override
         public void onUpgrade(SQLiteDatabase sqLiteDatabase, int oldVersion, int newVersion) {
-            ExternalSQLiteOpenHelper.this.onUpgradeInternally(sqLiteDatabase, oldVersion, newVersion);
+            System.out.println("Upgrade method: " + oldVersion + " to " + newVersion);
+            if (fromAssets) {
+                String script = Utility.readUpgradeScriptFromAssets(context, Utility.getUpgradeScriptPath(ExternalSQLiteOpenHelperConstants.ASSETS_DATABASE, oldVersion, newVersion));
+                if (script != null) {
+                    sqLiteDatabase.execSQL(script);
+                }
+                ExternalSQLiteOpenHelper.this.onUpgradeInternally(sqLiteDatabase, oldVersion, newVersion);
+            } else {
+                synchronized (ExternalSQLiteOpenHelper.this) {
+                    ExternalSQLiteOpenHelper.this.upgradeFromExternalSource = true;
+                    ExternalSQLiteOpenHelper.this.oldVersion = oldVersion;
+                    ExternalSQLiteOpenHelper.this.newVersion = newVersion;
+                }
+            }
         }
 
         @Override
         public void onDowngrade(SQLiteDatabase sqLiteDatabase, int oldVersion, int newVersion) {
-            ExternalSQLiteOpenHelper.this.onDowngradeInternally(sqLiteDatabase, oldVersion, newVersion);
+            System.out.println("Downgrade method: " + oldVersion + " to " + newVersion);
+            if (fromAssets) {
+                String script = Utility.readUpgradeScriptFromAssets(context, Utility.getUpgradeScriptPath(ExternalSQLiteOpenHelperConstants.ASSETS_DATABASE, oldVersion, newVersion));
+                if (script != null) {
+                    sqLiteDatabase.execSQL(script);
+                }
+                ExternalSQLiteOpenHelper.this.onDowngradeInternally(sqLiteDatabase, oldVersion, newVersion);
+            } else {
+                synchronized (ExternalSQLiteOpenHelper.this) {
+                    upgradeFromExternalSource = true;
+                    ExternalSQLiteOpenHelper.this.oldVersion = oldVersion;
+                    ExternalSQLiteOpenHelper.this.newVersion = newVersion;
+                }
+            }
         }
     }
 }

@@ -3,7 +3,7 @@ apply plugin: 'com.android.library'
 ext {
     PUBLISH_GROUP_ID = 'com.javahelps'
     PUBLISH_ARTIFACT_ID = 'externalsqliteimporter'
-    PUBLISH_VERSION = '0.1'
+    PUBLISH_VERSION = '0.3'
 }
 
 android {
